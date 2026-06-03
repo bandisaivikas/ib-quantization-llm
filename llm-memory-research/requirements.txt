@@ -1,0 +1,6 @@
+mlx-lm
+datasets
+scipy
+matplotlib
+pandas
+asitop

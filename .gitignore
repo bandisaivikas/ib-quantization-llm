@@ -1,0 +1,44 @@
+# Python environments
+venv/
+.venv/
+env/
+mlx_env/
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Keys / credentials
+*.key
+*.pem
+*.env
+.env*
+
+# Large model weights
+*.bin
+*.safetensors
+*.gguf
+*.ggml
+*.pt
+*.pth
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs and temp
+*.log
+*.tmp
+/tmp/
+
+# Claude Code local settings
+.claude/settings.local.json
