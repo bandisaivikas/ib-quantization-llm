@@ -21,8 +21,6 @@ The Information Bottleneck (IB) framework provides a principled way to measure e
 |---|---|---|---|
 | FP32 Baseline | 54.5% | 8.9 | — |
 | Uniform INT8 | 56.0% | 9.7 | baseline |
-| GPTQ-style 7-bit | 33.5% | 2,780 | high |
-| AWQ-style 7-bit | 29.0% | 59,409 | very high |
 | Random 7-bit | 35.0% | — | — |
 | **IB-7bit (ours)** | **46.5%** | **42.3** | **lowest** |
 | Uniform INT4 | 23.0% | 1,007,348 | extreme |
@@ -47,7 +45,7 @@ Scales the full pipeline to Llama 3.1 8B Instruct on Lightning AI. Runs all four
 - **EXP 1**: Ground-truth layer-wise KL-divergence map (32 layers × 500 calibration prompts from GSM8K)
 - **EXP 4**: Layer information plane displacement (I(X;T) vs I(T;Y) under INT4 quantization)
 - **EXP 5**: T-selection validation (confirms T = Q(W) is the correct bottleneck)
-- **7-bit Showdown**: IB vs GPTQ vs AWQ vs Random at identical memory
+- **7-bit Showdown**: IB vs Random at identical memory
 
 ---
 
