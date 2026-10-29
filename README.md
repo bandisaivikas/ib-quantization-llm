@@ -1,166 +1,135 @@
-# IB-Guided LLM Quantization
+# IB-Quantization-LLM
 
-**Information Bottleneck-guided selective quantization for LLMs — investigating silent inference degradation in Llama 3.1 8B.**
+Information-Bottleneck guided mixed-precision quantization for LLMs.
 
-> *Bandi Saivikas · IIIT Naya Raipur · B.Tech Data Science & AI*  
-> Target: EMNLP 2026
+## Key Finding
 
----
+**KL-divergence sensitivity varies 121× across Llama 3.1 8B's 32 layers.** Layer 0 dominates at 4.2× while mid-layers sit at ~0.1×. Uniform quantization ignores this; IB-guided allocation exploits it.
 
-## Motivation
+## The Problem: Silent Degradation
 
-Standard quantization methods (INT4, INT8) treat all layers equally. This research shows that **KL-divergence sensitivity varies by 121× across Llama 3.1 8B's 32 layers** — so uniform quantization silently destroys reasoning quality in the most sensitive layers while wasting precision on robust ones.
+Standard metrics (perplexity, accuracy) stay stable while token-distribution KL divergence blows up. A model can look fine on benchmarks while its output distribution has silently drifted. This repo detects and addresses that.
 
-The Information Bottleneck (IB) framework provides a principled way to measure each layer's information compression, identify which layers act as critical bottlenecks, and allocate bits accordingly.
+## Status
 
----
+| Component | Status |
+|-----------|--------|
+| Silent degradation discovery | ✅ Validated |
+| 121× layer-sensitivity map | ✅ Validated on Llama 3.1 8B |
+| β-score allocation algorithm | ⚠️ Bug found — see below |
+| GPTQ/AWQ baseline comparison | ❌ Not yet run |
 
-## Key Results (Llama 3.1 8B Instruct, 7-bit budget)
+### Critical Bug Found (Sept 2026)
 
-| Method | HellaSwag Acc. | WikiText-2 PPL | KL Divergence |
-|---|---|---|---|
-| FP32 Baseline | 54.5% | 8.9 | — |
-| Uniform INT8 | 56.0% | 9.7 | baseline |
-| Random 7-bit | 35.0% | — | — |
-| **IB-7bit (ours)** | **46.5%** | **42.3** | **lowest** |
-| Uniform INT4 | 23.0% | 1,007,348 | extreme |
+The MI estimator used to compute `arrow_len` (the information-plane term) was broken:
 
-IB-guided allocation cuts KL divergence by **81.5% vs GPTQ** and **90.9% vs AWQ** at the same 7-bit memory budget.
+```
+mutual_information(X, Y, n_bins=5)  # with n=20 samples
+```
 
----
+**Result:** Reported MI = 0.64 on pure independent noise (true = 0). The ablation correctly zeroed the term — but because the estimate was garbage, not because information-plane geometry is useless.
 
-## Experiments
+**Fix:** `scripts/mi_estimator.py` now uses:
+- KSG (k-nearest-neighbour) estimator instead of histogram
+- Adaptive bin count when using histogram
+- Mandatory shuffle noise floor — if not 2σ above shuffle baseline, treat as zero
 
-### Stage 1 — Silent Degradation Discovery (`gpt2_kl_accuracy_all_configs.ipynb`)
-Establishes that perplexity and accuracy metrics can appear stable while token-distribution KL divergence degrades significantly — the "silent" failure mode that motivates this work.
-
-### Stage 2 — IB Framework Validation (`stage2_ib_validation.ipynb`, `stage2_ib_validation.py`)
-Validates the IB framework on GPT-2. Confirms that quantized weight matrices can serve as valid IB bottlenecks (T-selection: T = Q(W) weights, not activations). Produces layer-wise KL-divergence maps and information plane visualizations.
-
-### Stage 3 — IB Algorithm on GPT-2 (`stage3_ib_algorithm.ipynb`)
-Implements the full β-score allocation algorithm on GPT-2. Each layer receives a bit-width proportional to its IB sensitivity score. Validates the Pareto frontier between compression and information loss.
-
-### Stage 4 — Llama 3.1 8B Pipeline (`llama31_ib_complete_pipeline.ipynb`)
-Scales the full pipeline to Llama 3.1 8B Instruct on Lightning AI. Runs all four experiments end-to-end:
-- **EXP 1**: Ground-truth layer-wise KL-divergence map (32 layers × 500 calibration prompts from GSM8K)
-- **EXP 4**: Layer information plane displacement (I(X;T) vs I(T;Y) under INT4 quantization)
-- **EXP 5**: T-selection validation (confirms T = Q(W) is the correct bottleneck)
-- **7-bit Showdown**: IB vs Random at identical memory
-
----
+**Next step:** Rerun Stage 2 with the fixed estimator and 500+ calibration samples.
 
 ## Repository Structure
 
 ```
 ├── notebooks/
-│   ├── llama31_ib_complete_pipeline.ipynb   # Main pipeline: Llama 3.1 8B (Lightning AI)
-│   ├── llama3_ib_pipeline.ipynb             # Earlier Llama 3 8B version (local Apple Silicon)
-│   ├── llama_windows_gpu.ipynb              # Windows/CUDA port
-│   ├── stage2_ib_validation.ipynb           # Stage 2: GPT-2 IB framework validation
-│   ├── stage3_ib_algorithm.ipynb            # Stage 3: GPT-2 full IB algorithm
-│   ├── gpt2_kl_accuracy_all_configs.ipynb   # Stage 1: Silent degradation discovery
-│   ├── gpt2_demo_for_professor.ipynb        # Clean demo: GPT-2 IB vs uniform quantization
-│   └── ib_vs_original.ipynb                 # IB vs baseline comparison
+│   ├── llama31_ib_complete_pipeline.ipynb   # Main: Llama 3.1 8B
+│   ├── stage2_ib_validation.ipynb           # GPT-2 IB framework validation
+│   ├── stage3_ib_algorithm.ipynb            # GPT-2 full IB algorithm
+│   ├── gpt2_kl_accuracy_all_configs.ipynb   # Stage 1: silent degradation
+│   ├── gpt2_demo_for_professor.ipynb        # Clean demo
+│   ├── ib_vs_original.ipynb                 # IB vs baseline comparison
+│   └── ib_mi_diagnostics.ipynb              # MI estimator bug diagnosis
 ├── scripts/
-│   ├── ib_t_selection_experiment.py         # T-selection validation script (GPT-2)
-│   └── stage2_ib_validation.py              # Stage 2 validation script
+│   ├── mi_estimator.py                      # Fixed MI estimator with noise floor
+│   ├── allocate.py                          # Bit allocation for framing B
+│   ├── evaluate.py                          # Shared evaluation harness
+│   ├── ib_t_selection_experiment.py         # T-selection validation
+│   └── stage2_ib_validation.py              # Stage 2 validation
 ├── figures/
-│   ├── plots/                               # Llama 3.1 8B result figures (5 panels)
-│   ├── plotsfig1_silent_degradation.png     # Silent degradation demo
-│   ├── plotsfig2_layer_kl_map.png           # Layer-wise KL-D heatmap
-│   ├── plotsfig3_ib_vs_original.png         # IB vs original information plane
-│   ├── plotsfig4_pareto.png                 # Pareto frontier
-│   ├── plotsfig5_beta_scores.png            # β-score layer allocation
-│   ├── gpt2_all_quantization_results.png    # GPT-2 quantization sweep
-│   ├── ib_quantization_proofs.png           # Mathematical framework
-│   └── stage2_ib_framework_validation.png   # Stage 2 validation summary
+│   └── plots/                               # Llama 3.1 8B result figures
 ├── results/
-│   ├── llama31_results.json                 # Full Llama 3.1 8B experiment outputs
+│   ├── llama31_results.json                 # Llama 3.1 8B experiment outputs
 │   └── stage3_results.json                  # GPT-2 Stage 3 outputs
-└── llm-memory-research/
-    └── requirements.txt                     # Dependencies
+├── legacy/                                  # Superseded notebooks
+└── tests/                                   # pytest checks run by GitHub Actions
 ```
 
----
-
-## Method
-
-The IB-guided quantization assigns each layer a β-score:
-
-```
-β_l = α · KL_l^(EXP1) + (1-α) · Δplane_l^(EXP4)
-```
-
-where:
-- `KL_l^(EXP1)` — KL divergence when layer *l* alone is quantized (direct sensitivity)
-- `Δplane_l^(EXP4)` — information plane displacement under full INT4 quantization
-- `α = 1.0` — optimal weighting found by ablation (EXP1 signal dominates at this scale)
-
-Layers with high β are kept at INT8; layers with low β are quantized to INT4. The mixed-precision allocation targets an average of 7 bits with the same total memory as GPTQ/AWQ.
-
----
-
-## Reproducing the Results
+## Quick Start
 
 ### Requirements
 
 ```bash
-pip install transformers datasets scipy matplotlib torch huggingface_hub
+pip install -r requirements.txt
 ```
 
-For Apple Silicon (MLX):
+For Apple Silicon (MLX) — optional:
 ```bash
-pip install mlx-lm
+pip install -r requirements-apple-silicon.txt
 ```
 
-### Running the pipeline
+### Run the diagnostics
 
-**GPT-2 experiments (local, ~20 min total):**
 ```bash
-# T-selection validation
+python scripts/mi_estimator.py
+```
+
+This reproduces the MI estimator failure and verifies the fix.
+
+### Run GPT-2 experiments (~20 min)
+
+```bash
 python scripts/ib_t_selection_experiment.py
-
-# Full Stage 2 validation
 python scripts/stage2_ib_validation.py
 ```
 
-Then open the notebooks in order: `stage2_ib_validation.ipynb` → `stage3_ib_algorithm.ipynb`.
+Then open `notebooks/stage2_ib_validation.ipynb` → `notebooks/stage3_ib_algorithm.ipynb`.
 
-**Llama 3.1 8B (requires ≥16 GB RAM or Lightning AI GPU):**
+### Llama 3.1 8B (requires ≥16 GB RAM or Lightning AI GPU)
 
-Open `llama31_ib_complete_pipeline.ipynb` and set your HuggingFace token:
-```python
-login(token="YOUR_HUGGINGFACE_TOKEN")
-```
-Run cells top to bottom. Full pipeline takes ~90 min on an A10G (Lightning AI).
+Open `notebooks/llama31_ib_complete_pipeline.ipynb` and set your HuggingFace token.
 
-> **Note:** Llama 3.1 8B requires HuggingFace access approval at [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct).
+## Results
 
----
+| Model | Method | Avg Bits | HellaSwag | WikiText-2 PPL | KL vs FP32 |
+|-------|--------|----------|-----------|----------------|------------|
+| Llama 3.1 8B | FP32 Baseline | 32 | 54.5% | 8.9 | — |
+| Llama 3.1 8B | Uniform INT8 | 8 | 56.0% | 9.7 | baseline |
+| Llama 3.1 8B | Random 7-bit | 7 | 35.0% | — | — |
+| Llama 3.1 8B | **IB-7bit** | 7 | **46.5%** | **42.3** | **lowest** |
+| Llama 3.1 8B | Uniform INT4 | 4 | 23.0% | 1,007,348 | extreme |
 
-## Findings
+> **Read by matched bit-budget.** INT8 beats IB-7bit because it uses more bits — not a fair comparison. At matched 7-bit budget, IB allocation beats random by 11.5 points.
 
-1. **Layer 0 is the critical bottleneck** — it exhibits the highest KL-divergence sensitivity (4.2×, vs 0.1× for stable mid-layers). Quantizing it to INT4 alone accounts for most of the model's quality degradation.
+> **Not yet compared against GPTQ or AWQ.** That's the next step after fixing the MI estimator.
 
-2. **121× KL range across layers** — the variation in sensitivity dwarfs what any uniform scheme can account for, motivating selective allocation.
+## Planned Work
 
-3. **Silent degradation is real** — standard perplexity and accuracy metrics fail to detect significant KL-divergence degradation until it is catastrophic. The KL map catches it early.
-
-4. **IB-7bit dominates at the same memory** — 46.5% HellaSwag vs 33.5% (GPTQ) and 29% (AWQ), with perplexity 42 vs 2,780 and 59,409.
-
-5. **T = Q(W) is the correct bottleneck** — quantized weights, not activations, are the valid IB bottleneck variable. Activation-based T-selection gives statistically insignificant mutual information estimates.
-
----
+1. **Rerun Stage 2 with fixed MI estimator** — use `estimate_mi()` from `scripts/mi_estimator.py` with 500+ samples
+2. **Redo α sweep** — check if α moves off 1.0 now that the plane term isn't garbage
+3. **GPTQ/AWQ comparison (Framing B)** — use β-scores to *allocate* bitwidths with GPTQ as the underlying quantizer, not compete against it
 
 ## Citation
 
 If you use this work, please cite:
 
 ```bibtex
-@misc{bandi2026ibquantization,
-  title   = {Information Bottleneck-Guided Selective Quantization for LLMs},
-  author  = {Bandi, Saivikas},
-  year    = {2026},
-  note    = {Under submission, EMNLP 2026}
+@misc{bandi2026ibquant,
+  author = {Bandi, Sai Vikas},
+  title = {Information-Bottleneck Guided LLM Quantization},
+  year = {2026},
+  publisher = {GitHub},
+  url = {https://github.com/bandisaivikas/IB-Quantization-LLM}
 }
 ```
+
+## License
+
+MIT

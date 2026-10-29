@@ -1,0 +1,3 @@
+# Optional — only needed if running the Apple Silicon (MLX) path
+mlx-lm
+asitop
